@@ -63,22 +63,20 @@ jobs:
           from pathlib import Path
           p = Path("scripts/configure-ninja.py")
           s = p.read_text()
-          s = s.replace(
-              "\t\tgit_process.communicate()",
-              "\t\tgit_process.communicate()\\n\t\tif git_process.returncode != 0:\\n\t\t\traise RuntimeError('Git clone failed for ' + name)"
-          )
-          s = s.replace(
-              "\tcmake_process.communicate()",
-              "\tcmake_process.communicate()\\n\tif cmake_process.returncode != 0:\\n\t\traise RuntimeError('CMake configuration failed: ' + ' '.join(cmake_exec))"
-          )
-          s = s.replace(
-              "\tprocess.communicate()",
-              "\tprocess.communicate()\\n\tif process.returncode != 0:\\n\t\traise RuntimeError('Waf/Ninja configuration failed with exit code ' + str(process.returncode))"
-          )
+          replacements = [
+              ("\t\tgit_process.communicate()", "\t\tgit_process.communicate()\n\t\tif git_process.returncode != 0:\n\t\t\traise RuntimeError('Git clone failed for ' + name)"),
+              ("\tcmake_process.communicate()", "\tcmake_process.communicate()\n\tif cmake_process.returncode != 0:\n\t\traise RuntimeError('CMake configuration failed: ' + ' '.join(cmake_exec))"),
+              ("\tprocess.communicate()", "\tprocess.communicate()\n\tif process.returncode != 0:\n\t\traise RuntimeError('Waf/Ninja configuration failed with exit code ' + str(process.returncode))"),
+          ]
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit("Expected configure-ninja.py pattern not found: " + repr(old))
+              s = s.replace(old, new, 1)
           p.write_text(s)
           print("Patched configure-ninja.py to stop on Git/CMake/Waf errors")
           PY
           python3 -m py_compile scripts/configure-ninja.py
+          grep -n -A2 -B1 'returncode' scripts/configure-ninja.py
 
       - name: Build debug APK
         working-directory: upstream/android
