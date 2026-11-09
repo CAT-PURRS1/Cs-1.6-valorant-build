@@ -45,6 +45,13 @@ jobs:
           ref: master
           path: upstream/3rdparty/nanogl
 
+      - name: Check out GL4ES (upstream marks this submodule update=none)
+        uses: actions/checkout@v4
+        with:
+          repository: ptitSeb/gl4es
+          ref: master
+          path: upstream/3rdparty/gl4es/gl4es
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
