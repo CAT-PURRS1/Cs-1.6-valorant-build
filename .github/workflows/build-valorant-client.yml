@@ -1,0 +1,169 @@
+name: Build Valorant CS16Client ARM32 APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-client:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out CS16Client and all submodules
+        uses: actions/checkout@v4
+        with:
+          repository: FWGS/cs16-client
+          ref: main
+          path: cs16-client
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Fetch YaPB history required by CMake
+        run: git -C cs16-client/3rdparty/yapb fetch --unshallow origin || true
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK and build tools
+        run: |
+          yes | sdkmanager --licenses || true
+          sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" "ndk;28.2.13676358"
+
+      - name: Apply Valorant kill banner and sound integration
+        working-directory: cs16-client
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("cl_dll/death.cpp")
+          s = p.read_text()
+          marker = "DeathNoticeItem rgDeathNoticeList[ MAX_DEATHNOTICES + 1 ];"
+          additions = r"""
+          // Valorant-style local kill streak effects. Assets are read from the
+          // active cstrike game directory: sprites/mark/kill_<level>.spr and
+          // sound/misc/<weapon>/MultiKill_<level>_CT.wav.
+          static int g_valorantKillStreak = 0;
+          static HSPRITE g_valorantKillBanner = 0;
+          static float g_valorantBannerUntil = 0.0f;
+
+          static const char *ValorantWeaponKey(const char *weapon)
+          {
+            if (!strcmp(weapon, "ak47")) return "vandal";
+            if (!strcmp(weapon, "m4a1")) return "phantom";
+            if (!strcmp(weapon, "glock18")) return "classic";
+            if (!strcmp(weapon, "usp")) return "ghost";
+            if (!strcmp(weapon, "fiveseven")) return "bandit";
+            if (!strcmp(weapon, "deagle")) return "sheriff";
+            if (!strcmp(weapon, "mp5navy")) return "spectre";
+            if (!strcmp(weapon, "ump45")) return "stinger";
+            if (!strcmp(weapon, "famas")) return "bulldog";
+            if (!strcmp(weapon, "sg552") || !strcmp(weapon, "sg550") || !strcmp(weapon, "g3sg1")) return "guardian";
+            if (!strcmp(weapon, "awp")) return "operator";
+            if (!strcmp(weapon, "scout")) return "marshal";
+            if (!strcmp(weapon, "m249")) return "odin";
+            return "default";
+          }
+
+          static void ValorantRegisterKill(const char *weapon)
+          {
+            if (g_valorantKillStreak < 6)
+              ++g_valorantKillStreak;
+
+            char spritePath[96];
+            snprintf(spritePath, sizeof(spritePath), "sprites/mark/kill_%d.spr", g_valorantKillStreak);
+            g_valorantKillBanner = SPR_Load(spritePath);
+            g_valorantBannerUntil = gHUD.m_flTime + 5.0f;
+
+            char soundPath[160];
+            snprintf(soundPath, sizeof(soundPath), "misc/%s/MultiKill_%d_CT.wav",
+                     ValorantWeaponKey(weapon), g_valorantKillStreak);
+            PlaySound(soundPath, 1.0f);
+          }
+          """
+          if marker not in s:
+              raise SystemExit("Could not find death notice globals insertion point")
+          if "ValorantRegisterKill" not in s:
+              s = s.replace(marker, marker + "\n" + additions, 1)
+
+          marker = "\tif( i == 0 )\n\t\tm_iFlags &= ~HUD_DRAW; // disable hud item"
+          draw = r"""
+            // Draw the temporary kill banner above the crosshair.
+            if (g_valorantKillBanner && g_valorantBannerUntil > flTime)
+            {
+              int w = SPR_Width(g_valorantKillBanner, 0);
+              int x = (ScreenWidth - w) / 2;
+              int y = YRES(72);
+              SPR_Set(g_valorantKillBanner, 255, 255, 255);
+              SPR_DrawAdditive(0, x, y, NULL);
+            }
+            else if (g_valorantBannerUntil <= flTime)
+            {
+              g_valorantKillBanner = 0;
+            }
+
+          """
+          if marker not in s:
+              raise SystemExit("Could not find death notice Draw insertion point")
+          if "Draw the temporary kill banner" not in s:
+              s = s.replace(marker, draw + marker, 1)
+
+          marker = "\t// Play kill sound\n\tif ((killer_this_player || g_iUser2 == killer) &&"
+          hook = r"""
+            // Count only real kills made by this device's local player.
+            if (victim >= 1 && victim <= MAX_PLAYERS &&
+                g_PlayerInfoList[victim].thisplayer)
+            {
+              g_valorantKillStreak = 0;
+              g_valorantKillBanner = 0;
+              g_valorantBannerUntil = 0.0f;
+            }
+            else if (killer_this_player && killer != victim && killer != 0 &&
+                     !rgDeathNoticeList[i].bNonPlayerKill &&
+                     !rgDeathNoticeList[i].bSuicide &&
+                     !rgDeathNoticeList[i].bTeamKill)
+            {
+              ValorantRegisterKill(killedwith + 2);
+            }
+
+          """
+          if marker not in s:
+              raise SystemExit("Could not find DeathMsg kill-sound insertion point")
+          if "Count only real kills made" not in s:
+              s = s.replace(marker, hook + marker, 1)
+          p.write_text(s)
+          print("Applied local kill streak tracking, 5-second HUD banner and weapon-specific sound playback.")
+          PY
+
+      - name: Restrict APK to ARM32
+        working-directory: cs16-client/android
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("app/build.gradle")
+          s = p.read_text()
+          old = 'abiFilters "armeabi-v7a", "arm64-v8a", "x86"'
+          if old not in s:
+              raise SystemExit("Expected ABI filter declaration was not found")
+          p.write_text(s.replace(old, 'abiFilters "armeabi-v7a"', 1))
+          PY
+
+      - name: Build CS16Client debug APK
+        working-directory: cs16-client/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleGitDebug
+
+      - name: Upload customized ARM32 client APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: valorant-cs16client-arm32-debug-apk
+          path: cs16-client/android/app/build/outputs/apk/git/debug/app-git-debug.apk
+          if-no-files-found: error
+          retention-days: 14
