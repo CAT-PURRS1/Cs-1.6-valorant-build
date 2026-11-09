@@ -1,0 +1,55 @@
+name: Build ARM32 Android test APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-arm32:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Check out this build project
+        uses: actions/checkout@v4
+
+      - name: Check out Xash3D FWGS source and submodules
+        uses: actions/checkout@v4
+        with:
+          repository: FWGS/xash3d-fwgs
+          ref: master
+          path: upstream
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android NDK
+        run: sdkmanager "ndk;29.0.14206865"
+
+      - name: Restrict native build to ARM32
+        working-directory: upstream/android
+        run: |
+          sed -i 's/setOf("armeabi-v7a", "arm64-v8a", "x86")/setOf("armeabi-v7a")/' app/build.gradle.kts
+          grep 'ninja.abiFilters' app/build.gradle.kts
+
+      - name: Build debug APK
+        working-directory: upstream/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: xash3d-arm32-debug-apk
+          path: upstream/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
