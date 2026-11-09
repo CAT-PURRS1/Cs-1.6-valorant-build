@@ -29,6 +29,15 @@ jobs:
           ref: release-2.32.8
           path: upstream/3rdparty/SDL
 
+      - name: Check out HLSDK portable and nested submodules
+        uses: actions/checkout@v4
+        with:
+          repository: FWGS/hlsdk-portable
+          ref: mobile_hacks
+          path: upstream/3rdparty/hlsdk-portable
+          submodules: recursive
+          fetch-depth: 0
+
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
